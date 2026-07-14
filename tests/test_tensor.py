@@ -293,6 +293,63 @@ class TestMatmul:
         np.testing.assert_allclose(a.grad, num_grad_a, atol=1e-4)
 
 
+class TestMatmulBroadcasting:
+    # __matmul__'s backward used to use .T (reverses ALL axes), which is
+    # only correct for plain 2D matmul. As soon as one operand broadcasts
+    # against a batch dim (2D weight @ 3D batch of matrices -- exactly what
+    # Conv2d's im2col-based forward needs), it either crashed on a shape
+    # mismatch or silently produced the wrong gradient.
+
+    def test_forward_broadcasts_like_numpy(self):
+        a = t(np.random.randn(3, 4))       # no batch dim
+        b = t(np.random.randn(5, 4, 2))    # batch of 5 matrices
+        out = a @ b
+        assert out.data.shape == (5, 3, 2)
+        np.testing.assert_allclose(out.data, a.data @ b.data)
+
+    def test_backward_matches_finite_differences(self):
+        rng = np.random.default_rng(1)
+        a_data = rng.normal(size=(3, 4))
+        b_data = rng.normal(size=(5, 4, 2))
+        eps = 1e-6
+
+        def loss(a_arr, b_arr):
+            return (a_arr @ b_arr).sum()
+
+        a, b = Tensor(a_data.copy()), Tensor(b_data.copy())
+        out = (a @ b).sum()
+        out.backward()
+
+        num_grad_a = np.zeros_like(a_data)
+        it = np.nditer(a_data, flags=["multi_index"])
+        for _ in it:
+            idx = it.multi_index
+            perturbed = a_data.copy()
+            perturbed[idx] += eps
+            num_grad_a[idx] = (loss(perturbed, b_data) - loss(a_data, b_data)) / eps
+        np.testing.assert_allclose(a.grad, num_grad_a, atol=1e-4)
+
+        num_grad_b = np.zeros_like(b_data)
+        it = np.nditer(b_data, flags=["multi_index"])
+        for _ in it:
+            idx = it.multi_index
+            perturbed = b_data.copy()
+            perturbed[idx] += eps
+            num_grad_b[idx] = (loss(a_data, perturbed) - loss(a_data, b_data)) / eps
+        np.testing.assert_allclose(b.grad, num_grad_b, atol=1e-4)
+
+    def test_plain_2d_matmul_unaffected(self):
+        # regression guard: swapaxes(-1, -2) must behave identically to .T
+        # for plain 2D matrices.
+        a = t([[1.0, 2.0], [3.0, 4.0]])
+        b = t([[5.0, 6.0], [7.0, 8.0]])
+        out = a @ b
+        out.grad = np.ones((2, 2))
+        out._backward_fn()
+        np.testing.assert_allclose(a.grad, np.ones((2, 2)) @ b.data.T)
+        np.testing.assert_allclose(b.grad, a.data.T @ np.ones((2, 2)))
+
+
 # ---------------------------------------------------------------------------
 # reshape / transpose
 # ---------------------------------------------------------------------------
