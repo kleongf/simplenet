@@ -81,8 +81,13 @@ class Tensor:
     def __matmul__(self, other):
         out = Tensor(self.data @ other.data, (self, other))
         def _backward():
-            self.grad += out.grad @ other.data.T
-            other.grad += self.data.T @ out.grad
+            # swapaxes(-1, -2) transposes only the matrix dims, not any
+            # leading broadcast/batch dims (unlike .T, which reverses all
+            # axes and is only correct for plain 2D matmul).
+            other_t = np.swapaxes(other.data, -1, -2)
+            self_t = np.swapaxes(self.data, -1, -2)
+            self.grad += self._unbroadcast(out.grad @ other_t, self.data.shape)
+            other.grad += self._unbroadcast(self_t @ out.grad, other.data.shape)
         out._backward_fn = _backward
         return out
     
