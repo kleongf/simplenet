@@ -148,6 +148,82 @@ class TestMul:
 
 
 # ---------------------------------------------------------------------------
+# scalar arithmetic (tensor OP scalar and scalar OP tensor)
+# ---------------------------------------------------------------------------
+
+class TestScalarArithmetic:
+    def test_add_scalar_forward(self):
+        a = t([1.0, 2.0, 3.0])
+        out = a + 5.0
+        np.testing.assert_allclose(out.data, [6.0, 7.0, 8.0])
+
+    def test_radd_scalar_forward(self):
+        a = t([1.0, 2.0, 3.0])
+        out = 5.0 + a
+        np.testing.assert_allclose(out.data, [6.0, 7.0, 8.0])
+
+    def test_add_scalar_backward(self):
+        a = t([1.0, 2.0])
+        out = a + 5.0
+        out.grad = np.array([1.0, 1.0])
+        out._backward_fn()
+        np.testing.assert_allclose(a.grad, [1.0, 1.0])
+
+    def test_mul_scalar_forward(self):
+        a = t([1.0, 2.0, 3.0])
+        out = a * 2.0
+        np.testing.assert_allclose(out.data, [2.0, 4.0, 6.0])
+
+    def test_rmul_scalar_forward(self):
+        a = t([1.0, 2.0, 3.0])
+        out = 2.0 * a
+        np.testing.assert_allclose(out.data, [2.0, 4.0, 6.0])
+
+    def test_mul_scalar_backward(self):
+        a = t([1.0, 2.0])
+        out = a * 3.0
+        out.grad = np.array([1.0, 1.0])
+        out._backward_fn()
+        np.testing.assert_allclose(a.grad, [3.0, 3.0])
+
+    def test_rmul_scalar_backward(self):
+        a = t([1.0, 2.0])
+        out = 3.0 * a
+        out.grad = np.array([1.0, 1.0])
+        out._backward_fn()
+        np.testing.assert_allclose(a.grad, [3.0, 3.0])
+
+    def test_sub_scalar_forward(self):
+        a = t([5.0, 6.0])
+        out = a - 2.0
+        np.testing.assert_allclose(out.data, [3.0, 4.0])
+
+    def test_truediv_scalar_forward(self):
+        a = t([6.0, 9.0])
+        out = a / 3.0
+        np.testing.assert_allclose(out.data, [2.0, 3.0])
+
+    def test_scalar_op_chain_matches_finite_differences(self):
+        a_data = np.array([1.0, 2.0, 3.0])
+        eps = 1e-6
+
+        def loss(a_arr):
+            return ((2.0 * a_arr + 1.0) ** 2).sum()
+
+        a = Tensor(a_data.copy())
+        out = ((2.0 * a + 1.0) ** 2).sum()
+        out.backward()
+
+        num_grad = np.zeros_like(a_data)
+        for i in range(len(a_data)):
+            perturbed = a_data.copy()
+            perturbed[i] += eps
+            num_grad[i] = (loss(perturbed) - loss(a_data)) / eps
+
+        np.testing.assert_allclose(a.grad, num_grad, atol=1e-4)
+
+
+# ---------------------------------------------------------------------------
 # __exp__  (note: not a real Python dunder hook; must be called explicitly)
 # ---------------------------------------------------------------------------
 
