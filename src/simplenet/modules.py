@@ -18,7 +18,7 @@ class Linear(Module):
         self.bias = Tensor(np.random.randn(out_features) * np.sqrt(1. / in_features))
     
     def forward(self, x):
-        return x @ self.weight + self.bias
+        return x @ self.weight.transpose() + self.bias
     
     def parameters(self):
         return [self.weight, self.bias]

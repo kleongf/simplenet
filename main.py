@@ -17,7 +17,7 @@ optimizer = SGD(model.parameters(), lr=0.1)
 
 for epoch in range(1000):
     y_pred = model.forward(X)
-    loss = MSELoss()(y_pred, y_true)
+    loss = MSELoss(y_pred, y_true)
 
     optimizer.zero_grad()
     loss.backward()
