@@ -22,3 +22,42 @@ class Linear(Module):
     
     def parameters(self):
         return [self.weight, self.bias]
+    
+class Sequential(Module):
+    def __init__(self, *layers): 
+        self.layers = layers
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer.forward(x)
+        return x
+    def parameters(self):
+        return [p for layer in self.layers for p in layer.parameters()]
+
+# activation function modules to make it easier to build a neural network
+class ReLU(Module):
+    def forward(self, x):
+        return x.relu()
+    
+    def parameters(self):
+        return []
+    
+class Sigmoid(Module):
+    def forward(self, x):
+        return x.sigmoid()
+
+    def parameters(self):
+        return []
+    
+class Tanh(Module):
+    def forward(self, x):
+        return x.tanh()
+
+    def parameters(self):
+        return []
+    
+class Softmax(Module): 
+    def forward(self, x):
+        return x.softmax()
+
+    def parameters(self):
+        return []
