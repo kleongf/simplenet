@@ -59,7 +59,14 @@ class Tensor:
             self.grad += -out.grad
         out._backward_fn = _backward
         return out
-    
+
+    def abs(self):
+        out = Tensor(np.abs(self.data), (self,))
+        def _backward():
+            self.grad += out.grad * np.sign(self.data) # gradient of abs is 1, x > 0, -1, x < 0
+        out._backward_fn = _backward
+        return out
+
     # matrix operations
     def __matmul__(self, other):
         out = Tensor(self.data @ other.data, (self, other))

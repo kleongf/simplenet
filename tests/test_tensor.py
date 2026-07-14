@@ -14,7 +14,7 @@ Jacobian of the wrong shape (see TestSoftmax.test_backward_batched_input_is_unsu
 import numpy as np
 import pytest
 
-from core.tensor import Tensor
+from simplenet.tensor import Tensor
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +521,39 @@ class TestNeg:
         out.grad = np.array([1.0, 1.0])
         out._backward_fn()
         np.testing.assert_allclose(a.grad, [-1.0, -1.0])
+
+
+# ---------------------------------------------------------------------------
+# abs
+# ---------------------------------------------------------------------------
+
+class TestAbs:
+    def test_forward(self):
+        a = t([1.0, -2.0, 0.0, -3.5])
+        out = a.abs()
+        np.testing.assert_allclose(out.data, [1.0, 2.0, 0.0, 3.5])
+
+    def test_backward(self):
+        a = t([2.0, -3.0])
+        out = a.abs()
+        out.grad = np.array([1.0, 1.0])
+        out._backward_fn()
+        np.testing.assert_allclose(a.grad, [1.0, -1.0])
+
+    def test_backward_scales_with_upstream_grad(self):
+        a = t([2.0, -3.0])
+        out = a.abs()
+        out.grad = np.array([5.0, 2.0])
+        out._backward_fn()
+        np.testing.assert_allclose(a.grad, [5.0, -2.0])
+
+    def test_backward_at_zero_is_zero(self):
+        # Implementation uses np.sign(x), which is 0 at x == 0.
+        a = t([0.0])
+        out = a.abs()
+        out.grad = np.array([1.0])
+        out._backward_fn()
+        np.testing.assert_allclose(a.grad, [0.0])
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,13 @@
 import numpy as np
 
-from core.tensor import Tensor
-from module.module import Module
+from simplenet.tensor import Tensor
+
+class Module:
+    def parameters(self):
+        return []
+    def zero_grad(self):
+        for p in self.parameters():
+            p.grad = np.zeros_like(p.data)
 
 class Linear(Module):
     def __init__(self, in_features: int, out_features: int):
