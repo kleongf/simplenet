@@ -18,20 +18,30 @@ class Tensor:
         return grad
 
     def __add__(self, other):
+        if not isinstance(other, Tensor):
+            other = Tensor(np.asarray(other, dtype=np.float64))
         out = Tensor(self.data + other.data, (self, other))
         def _backward():
             self.grad += self._unbroadcast(out.grad, self.data.shape)
             other.grad += self._unbroadcast(out.grad, other.data.shape)
         out._backward_fn = _backward
         return out
-    
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
     def __mul__(self, other):
+        if not isinstance(other, Tensor):
+            other = Tensor(np.asarray(other, dtype=np.float64))
         out = Tensor(self.data * other.data, (self, other))
         def _backward():
             self.grad += self._unbroadcast(other.data * out.grad, self.data.shape)
             other.grad += self._unbroadcast(self.data * out.grad, other.data.shape)
         out._backward_fn = _backward
         return out
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
 
     def __exp__(self):
         out = Tensor(np.exp(self.data), (self,))
