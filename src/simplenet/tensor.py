@@ -59,7 +59,10 @@ class Tensor:
 
     def __sub__(self, other):
         return self + (-other)
-    
+
+    def __rsub__(self, other):
+        return (-self) + other
+
     def __truediv__(self, other):
         return self * (other ** -1)
     
@@ -74,6 +77,13 @@ class Tensor:
         out = Tensor(np.abs(self.data), (self,))
         def _backward():
             self.grad += out.grad * np.sign(self.data) # gradient of abs is 1, x > 0, -1, x < 0
+        out._backward_fn = _backward
+        return out
+
+    def log(self):
+        out = Tensor(np.log(self.data), (self,))
+        def _backward():
+            self.grad += out.grad / self.data
         out._backward_fn = _backward
         return out
 
@@ -153,8 +163,8 @@ class Tensor:
         out = Tensor(exp_data / np.sum(exp_data, axis=axis, keepdims=True), (self,))
         def _backward():
             s = out.data
-            jacobian = np.diagflat(s) - np.outer(s, s)
-            self.grad += out.grad @ jacobian
+            g = out.grad
+            self.grad += s * (g - np.sum(g * s, axis=axis, keepdims=True)) # gradient of softmax is s * (g - sum(g * s))
         out._backward_fn = _backward
         return out
     
@@ -187,6 +197,16 @@ class Tensor:
                 return (len(data),) + self._get_shape(data[0])
         else:
             return ()
+        
+    def __getitem__(self, idx):
+        out = Tensor(self.data[idx], (self,))
+        def _backward():
+            grad = np.zeros_like(self.data)
+            # add all indices in idx to the gradient of the original tensor
+            np.add.at(grad, idx, out.grad)
+            self.grad += grad
+        out._backward_fn = _backward
+        return out
 
     @property
     def shape(self):
