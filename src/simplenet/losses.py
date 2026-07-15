@@ -29,7 +29,7 @@ class MAELoss(Loss):
 class CrossEntropyLoss(Loss):
     def _compute(self, pred, target):
         # pred: (batch, classes) logits, target: (batch,) class indices
-        log_probs = pred.log_softmax(axis=-1)
+        log_probs = pred.softmax(axis=-1).log()
         return -log_probs[np.arange(len(target.data)), target.data]
 
 # binary cross entropy loss: used for binary classification
