@@ -580,16 +580,48 @@ class TestSoftmax:
         expected = expected_jacobian @ np.array([1.0, 0.0, 0.0])
         np.testing.assert_allclose(a.grad, expected)
 
-    def test_backward_batched_input_is_unsupported(self):
-        # Known limitation: the Jacobian is built with diagflat/outer on the
-        # full (flattened) output, which is only valid for a single 1-D
-        # probability vector. For 2-D (batched) input the resulting
-        # Jacobian shape doesn't match out.grad's shape.
-        a = t([[1.0, 2.0, 3.0], [1.0, 1.0, 1.0]])
+    def test_backward_batched_matches_per_row_jacobian(self):
+        # Regression test: backward used to build the Jacobian with
+        # diagflat/outer on the full (flattened) output, which only made
+        # sense for a single 1-D vector -- for 2-D (batched) input it
+        # either crashed or mixed gradients across rows. Backward is now
+        # the closed-form s * (g - sum(g*s)), which is correct per-row.
+        a = t([[1.0, 2.0, 3.0], [0.5, 0.1, 4.0]])
         out = a.softmax(axis=-1)
-        out.grad = np.ones_like(out.data)
-        with pytest.raises(ValueError):
-            out._backward_fn()
+        out.grad = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        out._backward_fn()
+
+        expected = np.zeros_like(a.data)
+        for i, (s, g) in enumerate(zip(out.data, out.grad)):
+            jacobian = np.diagflat(s) - np.outer(s, s)
+            expected[i] = jacobian @ g
+        np.testing.assert_allclose(a.grad, expected, atol=1e-10)
+
+    def test_backward_batched_matches_finite_differences(self):
+        rng = np.random.default_rng(0)
+        x_data = rng.normal(size=(4, 5))
+
+        def softmax_np(x):
+            e = np.exp(x - x.max(axis=-1, keepdims=True))
+            return e / e.sum(axis=-1, keepdims=True)
+
+        def loss(x):
+            return (softmax_np(x) ** 2).sum()
+
+        a = Tensor(x_data.copy())
+        out = (a.softmax() ** 2).sum()
+        out.backward()
+
+        eps = 1e-6
+        num_grad = np.zeros_like(x_data)
+        it = np.nditer(x_data, flags=["multi_index"])
+        for _ in it:
+            idx = it.multi_index
+            perturbed = x_data.copy()
+            perturbed[idx] += eps
+            num_grad[idx] = (loss(perturbed) - loss(x_data)) / eps
+
+        np.testing.assert_allclose(a.grad, num_grad, atol=1e-4)
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +745,95 @@ class TestSub:
         out.backward()
         np.testing.assert_allclose(a.grad, np.ones((2, 3)))
         np.testing.assert_allclose(b.grad, [-2.0, -2.0, -2.0])
+
+    def test_rsub_scalar_forward(self):
+        a = t([1.0, 2.0, 3.0])
+        out = 5.0 - a
+        np.testing.assert_allclose(out.data, [4.0, 3.0, 2.0])
+
+    def test_rsub_scalar_backward(self):
+        a = t([1.0, 2.0])
+        out = 5.0 - a
+        out.backward()
+        # d(c - x)/dx = -1
+        np.testing.assert_allclose(a.grad, [-1.0, -1.0])
+
+
+# ---------------------------------------------------------------------------
+# log
+# ---------------------------------------------------------------------------
+
+class TestLog:
+    def test_forward(self):
+        a = t([1.0, np.e, 10.0])
+        out = a.log()
+        np.testing.assert_allclose(out.data, [0.0, 1.0, np.log(10.0)])
+
+    def test_backward(self):
+        a = t([1.0, 2.0, 4.0])
+        out = a.log()
+        out.grad = np.ones(3)
+        out._backward_fn()
+        # d(log(x))/dx = 1/x
+        np.testing.assert_allclose(a.grad, [1.0, 0.5, 0.25])
+
+    def test_backward_matches_finite_differences(self):
+        a_data = np.array([0.5, 2.0, 3.5])
+        eps = 1e-6
+
+        def loss(arr):
+            return np.log(arr).sum()
+
+        a = Tensor(a_data.copy())
+        out = a.log().sum()
+        out.backward()
+
+        num_grad = np.zeros_like(a_data)
+        for i in range(len(a_data)):
+            perturbed = a_data.copy()
+            perturbed[i] += eps
+            num_grad[i] = (loss(perturbed) - loss(a_data)) / eps
+        np.testing.assert_allclose(a.grad, num_grad, atol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# __getitem__
+# ---------------------------------------------------------------------------
+
+class TestGetItem:
+    def test_forward_fancy_indexing(self):
+        a = t(np.arange(20).reshape(4, 5))
+        rows, cols = np.array([0, 1, 2, 3]), np.array([1, 3, 0, 4])
+        out = a[rows, cols]
+        np.testing.assert_allclose(out.data, a.data[rows, cols])
+
+    def test_backward_scatters_grad_to_selected_positions(self):
+        a = t(np.arange(20, dtype=np.float64).reshape(4, 5))
+        rows, cols = np.array([0, 1, 2, 3]), np.array([1, 3, 0, 4])
+        out = a[rows, cols]
+        out.grad = np.array([1.0, 2.0, 3.0, 4.0])
+        out._backward_fn()
+
+        expected = np.zeros((4, 5))
+        expected[rows, cols] = [1.0, 2.0, 3.0, 4.0]
+        np.testing.assert_allclose(a.grad, expected)
+
+    def test_backward_accumulates_repeated_indices(self):
+        # np.add.at (not plain assignment) is required here -- a repeated
+        # index must accumulate gradient contributions, not overwrite them.
+        a = t([1.0, 2.0, 3.0])
+        out = a[np.array([0, 0, 1])]
+        out.grad = np.array([1.0, 1.0, 1.0])
+        out._backward_fn()
+        np.testing.assert_allclose(a.grad, [2.0, 1.0, 0.0])
+
+    def test_single_int_index(self):
+        a = t([10.0, 20.0, 30.0])
+        out = a[1]
+        assert out.data == 20.0
+        out.grad = np.array(1.0)
+        out._backward_fn()
+        np.testing.assert_allclose(a.grad, [0.0, 1.0, 0.0])
 
 
 # ---------------------------------------------------------------------------
