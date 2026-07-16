@@ -56,7 +56,10 @@ class Module:
     def zero_grad(self):
         for p in self.parameters():
             p.grad = np.zeros_like(p.data)
-
+    def state_dict(self):
+        return {}
+    def load_state_dict(self, state_dict):
+        pass
 # hidden layers
 class Linear(Module):
     def __init__(self, in_features: int, out_features: int):
@@ -72,6 +75,16 @@ class Linear(Module):
     def parameters(self):
         return [self.weight, self.bias]
     
+    def state_dict(self):
+        return {
+            "weight": self.weight.data.copy(),
+            "bias": self.bias.data.copy()
+        }
+    
+    def load_state_dict(self, state_dict):
+        self.weight.data = state_dict["weight"].copy()
+        self.bias.data = state_dict["bias"].copy()
+
 class Sequential(Module):
     def __init__(self, *layers): 
         self.layers = layers
@@ -81,6 +94,24 @@ class Sequential(Module):
         return x
     def parameters(self):
         return [p for layer in self.layers for p in layer.parameters()]
+
+    def state_dict(self):
+        state_dict = {}
+        for i, layer in enumerate(self.layers):
+            layer_state = layer.state_dict()
+            for key, value in layer_state.items():
+                state_dict[f"{i}.{key}"] = value
+        return state_dict
+    
+    def load_state_dict(self, state_dict):
+        for i, layer in enumerate(self.layers):
+            prefix = f"{i}."
+            layer_state = {
+                # extract the layer's state key name and value
+                key[len(prefix):]: value for key, value in state_dict.items() if key.startswith(prefix)
+            }
+            # load the state dict for the layer
+            layer.load_state_dict(layer_state)
     
 class Flatten(Module):
     def forward(self, x):
@@ -131,6 +162,20 @@ class BatchNorm1D(Module):
     def parameters(self):
         return [self.gamma, self.beta]
     
+    def state_dict(self):
+        return {
+            "gamma": self.gamma.data.copy(),
+            "beta": self.beta.data.copy(),
+            "running_mean": self.running_mean.data.copy(),
+            "running_var": self.running_var.data.copy()
+        }
+    
+    def load_state_dict(self, state_dict):
+        self.gamma.data = state_dict["gamma"].copy()
+        self.beta.data = state_dict["beta"].copy()
+        self.running_mean.data = state_dict["running_mean"].copy()
+        self.running_var.data = state_dict["running_var"].copy()
+    
 class Conv2d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0):
         # same initialization as pytorch from kaiming uniform or somethin lol
@@ -155,6 +200,16 @@ class Conv2d(Module):
 
     def parameters(self):
         return [self.weight, self.bias]
+    
+    def state_dict(self):
+        return {
+            "weight": self.weight.data.copy(),
+            "bias": self.bias.data.copy()
+        }
+    
+    def load_state_dict(self, state_dict):
+        self.weight.data = state_dict["weight"].copy()
+        self.bias.data = state_dict["bias"].copy()
     
 class MaxPool2d(Module):
     def __init__(self, kernel_size, stride=None, padding=0):
