@@ -2,6 +2,54 @@ import numpy as np
 
 from simplenet.tensor import Tensor
 
+# refactor utility functions
+def calculate_output_shape(height, width, kernel_size, stride, padding):
+    kernel_height, kernel_width = kernel_size
+    # output kernel dimensions, not using dilation for now (set to 1)
+    out_height = (height + 2 * padding - kernel_height) // stride + 1
+    out_width = (width + 2 * padding - kernel_width) // stride + 1
+    return out_height, out_width
+
+def im2col(x: Tensor, kernel_size, stride, padding, pad_value=0):
+    # x: (batch, channels, height, width)
+    # pad with 0 for convolution, -inf for max pooling, since 0 could be the max value.
+    kernel_height, kernel_width = kernel_size
+    batch_size, channels, height, width = x.data.shape
+    out_height, out_width = calculate_output_shape(height, width, kernel_size, stride, padding)
+
+    # pad the input
+    x_padded = np.pad(x.data, ((0, 0), (0, 0), (padding, padding), (padding, padding)), mode='constant', constant_values=pad_value)
+
+    # im2col
+    cols_data = np.zeros((batch_size, channels * kernel_height * kernel_width, out_height * out_width))
+    for oy in range(out_height):
+        for ox in range(out_width):
+            patch = x_padded[:, :, oy*stride:oy*stride+kernel_height, ox*stride:ox*stride+kernel_width]
+            cols_data[:, :, oy*out_width + ox] = patch.reshape(batch_size, -1)
+
+    cols = Tensor(cols_data, (x,))
+    def _backward():
+        # col2im is exactly the adjoint (scatter-add) of im2col's gather,
+        # so it's reused here as im2col's backward.
+        x.grad += col2im(Tensor(cols.grad), x.data.shape, kernel_size, stride, padding).data
+    cols._backward_fn = _backward
+    return cols
+
+def col2im(cols: Tensor, x_shape, kernel_size, stride, padding):
+    # cols: (batch, channels * kernel_height * kernel_width, out_height * out_width)
+    kernel_height, kernel_width = kernel_size
+    batch_size, channels, height, width = x_shape
+    out_height, out_width = calculate_output_shape(height, width, kernel_size, stride, padding)
+
+    x_padded = np.zeros((batch_size, channels, height + 2 * padding, width + 2 * padding))
+    for oy in range(out_height):
+        for ox in range(out_width):
+            patch = cols.data[:, :, oy*out_width + ox].reshape(batch_size, channels, kernel_height, kernel_width)
+            x_padded[:, :, oy*stride:oy*stride+kernel_height, ox*stride:ox*stride+kernel_width] += patch
+    if padding > 0:
+        return Tensor(x_padded[:, :, padding:-padding, padding:-padding])
+    return Tensor(x_padded)
+
 class Module:
     def parameters(self):
         return []
@@ -90,55 +138,10 @@ class Conv2d(Module):
         self.bias = Tensor(np.random.randn(out_channels) * np.sqrt(1. / (in_channels * kernel_size * kernel_size)))
         self.stride, self.padding = stride, padding
 
-    def _out_hw(self, height, width):
-        kernel_height, kernel_width = self.weight.data.shape[2], self.weight.data.shape[3]
-        # output kernel dimensions, not using dilation for now (set to 1)
-        out_height = (height + 2 * self.padding - kernel_height) // self.stride + 1
-        out_width = (width + 2 * self.padding - kernel_width) // self.stride + 1
-        return out_height, out_width
-
-    def im2col(self, x):
-        # x: (batch, channels, height, width)
-        batch_size, channels, height, width = x.data.shape
-        kernel_height, kernel_width = self.weight.data.shape[2], self.weight.data.shape[3]
-        out_height, out_width = self._out_hw(height, width)
-
-        # pad the input
-        x_padded = np.pad(x.data, ((0, 0), (0, 0), (self.padding, self.padding), (self.padding, self.padding)), mode='constant')
-
-        # im2col
-        cols_data = np.zeros((batch_size, channels * kernel_height * kernel_width, out_height * out_width))
-        for oy in range(out_height):
-            for ox in range(out_width):
-                patch = x_padded[:, :, oy*self.stride:oy*self.stride+kernel_height, ox*self.stride:ox*self.stride+kernel_width]
-                cols_data[:, :, oy*out_width + ox] = patch.reshape(batch_size, -1)
-
-        cols = Tensor(cols_data, (x,))
-        def _backward():
-            # col2im is exactly the adjoint (scatter-add) of im2col's gather,
-            # so it's reused here as im2col's backward.
-            x.grad += self.col2im(Tensor(cols.grad), x.data.shape).data
-        cols._backward_fn = _backward
-        return cols
-
-    def col2im(self, cols, x_shape):
-        # cols: (batch, channels * kernel_height * kernel_width, out_height * out_width)
-        batch_size, channels, height, width = x_shape
-        kernel_height, kernel_width = self.weight.data.shape[2], self.weight.data.shape[3]
-        out_height, out_width = self._out_hw(height, width)
-
-        x_padded = np.zeros((batch_size, channels, height + 2 * self.padding, width + 2 * self.padding))
-        for oy in range(out_height):
-            for ox in range(out_width):
-                patch = cols.data[:, :, oy*out_width + ox].reshape(batch_size, channels, kernel_height, kernel_width)
-                x_padded[:, :, oy*self.stride:oy*self.stride+kernel_height, ox*self.stride:ox*self.stride+kernel_width] += patch
-        if self.padding > 0:
-            return Tensor(x_padded[:, :, self.padding:-self.padding, self.padding:-self.padding])
-        return Tensor(x_padded)
-
     def forward(self, x):
         # x: (batch, channels, height, width)
-        cols = self.im2col(x)
+        kernel_size = (self.weight.data.shape[2], self.weight.data.shape[3])
+        cols = im2col(x, kernel_size, self.stride, self.padding)
         # reshape weight to (out_channels, in_channels * kernel_size * kernel_size)
         weight_reshaped = self.weight.reshape((self.weight.data.shape[0], -1))
         # (out_channels, 1) so it broadcasts against the channel axis of
@@ -147,11 +150,35 @@ class Conv2d(Module):
         out = weight_reshaped @ cols + bias_reshaped
         # reshape back to (batch, out_channels, out_height, out_width)
         batch_size, _, height, width = x.data.shape
-        out_height, out_width = self._out_hw(height, width)
+        out_height, out_width = calculate_output_shape(height, width, kernel_size, self.stride, self.padding)
         return out.reshape((batch_size, -1, out_height, out_width))
 
     def parameters(self):
         return [self.weight, self.bias]
+    
+class MaxPool2d(Module):
+    def __init__(self, kernel_size, stride=None, padding=0):
+        self.kernel_size = kernel_size
+        self.stride = stride if stride is not None else kernel_size
+        self.padding = padding
+
+    def forward(self, x):
+        # x: (batch, channels, height, width)
+        batch_size, channels, height, width = x.data.shape
+        kernel_size = (self.kernel_size, self.kernel_size)
+        out_height, out_width = calculate_output_shape(height, width, kernel_size, self.stride, self.padding)
+
+        # im2col flattens each window to channels * kernel_h * kernel_w, which
+        # mixes channels together. Needs to be split into (channels, window) to take
+        # max within a window for each channel separately. So reshape to (batch, channels, window, out_height * out_width)
+        cols = im2col(x, kernel_size, self.stride, self.padding, pad_value=-np.inf)
+        cols = cols.reshape((batch_size, channels, self.kernel_size * self.kernel_size, out_height * out_width))
+        # find the max along the columns axis, which is actually the window
+        out = cols.max(axis=2)
+        return out.reshape((batch_size, channels, out_height, out_width))
+
+    def parameters(self):
+        return []
 
 # activation function modules to make it easier to build a neural network
 class ReLU(Module):
