@@ -135,6 +135,23 @@ class Tensor:
             self.grad += np.ones_like(self.data) * grad / count
         out._backward_fn = _backward
         return out
+    
+    # different than a normal max function: sets grad to 1 if max and 0 if not.
+    def max(self, axis=None, keepdims=False):
+        out = Tensor(self.data.max(axis=axis, keepdims=keepdims), (self,))
+        def _backward():
+            grad = out.grad
+            out_data = out.data
+            if not keepdims and axis is not None:
+                # out_data must be re-expanded the same way grad is -- comparing
+                # the un-expanded (reduced-shape) out_data against self.data
+                # broadcasts against the wrong axis whenever axis isn't the
+                # last one, silently misplacing the gradient.
+                grad = np.expand_dims(grad, axis)
+                out_data = np.expand_dims(out_data, axis)
+            self.grad += np.where(self.data == out_data, grad, 0)
+        out._backward_fn = _backward
+        return out
 
     # activation functions
     def relu(self):
