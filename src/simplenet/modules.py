@@ -131,7 +131,7 @@ class Dropout(Module):
             return x
 
 class BatchNorm1D(Module):
-    def __init__(self, num_features: int, eps: float = 1e-5, momentum: float = 0.1):
+    def __init__(self, num_features: int, eps: float = 1e-5, momentum: float = 0.1, training: bool = True):
         self.num_features = num_features
         self.eps = eps
         self.momentum = momentum
@@ -140,7 +140,7 @@ class BatchNorm1D(Module):
         # standard normal distribution with mean 0 and variance 1
         self.running_mean = Tensor(np.zeros(num_features))
         self.running_var = Tensor(np.ones(num_features))
-        self.training = True
+        self.training = training
 
     def forward(self, x):
         if self.training:
@@ -157,6 +157,53 @@ class BatchNorm1D(Module):
             x_normalized = (x - self.running_mean) / (self.running_var + self.eps) ** 0.5
 
         out = self.gamma * x_normalized + self.beta
+        return out
+    
+    def parameters(self):
+        return [self.gamma, self.beta]
+    
+    def state_dict(self):
+        return {
+            "gamma": self.gamma.data.copy(),
+            "beta": self.beta.data.copy(),
+            "running_mean": self.running_mean.data.copy(),
+            "running_var": self.running_var.data.copy()
+        }
+    
+    def load_state_dict(self, state_dict):
+        self.gamma.data = state_dict["gamma"].copy()
+        self.beta.data = state_dict["beta"].copy()
+        self.running_mean.data = state_dict["running_mean"].copy()
+        self.running_var.data = state_dict["running_var"].copy()
+
+class BatchNorm2D(Module):
+    def __init__(self, num_features: int, eps: float = 1e-5, momentum: float = 0.1, training: bool = True):
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.gamma = Tensor(np.ones(num_features))
+        self.beta = Tensor(np.zeros(num_features))
+        # standard normal distribution with mean 0 and variance 1
+        self.running_mean = Tensor(np.zeros(num_features))
+        self.running_var = Tensor(np.ones(num_features))
+        self.training = training
+
+    def forward(self, x):
+        if self.training:
+            # Compute batch mean by channel (axis=(0, 2, 3)), removes the first, third, and fourth dimensions
+            batch_mean = x.mean(axis=(0, 2, 3))
+            # Compute batch mean and variance by collapsing the batch dimension (axis=0), removes the first dimension
+            batch_var = ((x - batch_mean.reshape((1, -1, 1, 1))) ** 2).mean(axis=(0, 2, 3))
+            # exponential moving average formula: (1-alpha) * old + x * new.
+            # running stats are buffers, not trainable, so update .data directly instead of Tensor arithmetic
+            self.running_mean.data = (1 - self.momentum) * self.running_mean.data + self.momentum * batch_mean.data
+            self.running_var.data = (1 - self.momentum) * self.running_var.data + self.momentum * batch_var.data
+            # formula for z-score normalization: (x - mean) / sqrt(var + eps), eps to prevent division by zero
+            x_normalized = (x - batch_mean.reshape((1, -1, 1, 1))) / (batch_var.reshape((1, -1, 1, 1)) + self.eps) ** 0.5
+        else:
+            x_normalized = (x - self.running_mean.reshape((1, -1, 1, 1))) / (self.running_var.reshape((1, -1, 1, 1)) + self.eps) ** 0.5
+
+        out = self.gamma.reshape((1, -1, 1, 1)) * x_normalized + self.beta.reshape((1, -1, 1, 1))
         return out
     
     def parameters(self):
