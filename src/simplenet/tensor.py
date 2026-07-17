@@ -126,7 +126,12 @@ class Tensor:
         return out
     
     def mean(self, axis=None, keepdims=False):
-        count = self.data.size if axis is None else self.data.shape[axis]
+        if axis is None:
+            count = self.data.size
+        elif isinstance(axis, tuple):
+            count = np.prod([self.data.shape[a] for a in axis])
+        else:
+            count = np.prod(self.data.shape[axis])
         out = Tensor(self.data.mean(axis=axis, keepdims=keepdims), (self,))
         def _backward():
             grad = out.grad
